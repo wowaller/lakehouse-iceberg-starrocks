@@ -94,6 +94,75 @@ PROPERTIES (
 );
 ```
 
+## Configuring an Existing StarRocks Cluster
+
+If you already have a running StarRocks cluster (v3.1.x or later) and want to connect it to a GCP BigLake Iceberg REST Catalog, follow these steps:
+
+### Step 1: Enable JNI on StarRocks BE Nodes
+Iceberg integration requires the Java Native Interface (JNI) to load Iceberg Java libraries inside the BE C++ process.
+1.  Ensure JDK (JDK 8, 11, or 17) is installed on all BE instances.
+2.  Edit the BE configuration file `be/conf/be.conf` on each BE node and set the `JAVA_HOME` property:
+    ```properties
+    JAVA_HOME = /usr/lib/jvm/default-java
+    ```
+    *(Replace `/usr/lib/jvm/default-java` with the actual path of your JDK).*
+3.  Restart all BE services to apply the change:
+    ```bash
+    ./be/bin/stop_be.sh
+    ./be/bin/start_be.sh --daemon
+    ```
+
+### Step 2: Grant IAM Permissions to StarRocks BE Instances
+StarRocks BE nodes need permissions to read data files from GCS.
+*   **If using Instance Role (Recommended)**:
+    1.  Identify the Service Account attached to your GCE VMs.
+    2.  Grant this Service Account the **Storage Object Viewer** (or **Storage Admin**) role on the GCS bucket containing the Iceberg data.
+*   **If using Service Account Key File**:
+    *   Create a GCP service account, download its JSON key file, copy it to the StarRocks nodes, and refer to it in the catalog properties (using `gcp.gcs.credential.file.path` property).
+
+### Step 3: Obtain GCP OAuth2 Access Token
+The BigLake REST Catalog API requires an OAuth2 access token for authentication. You can fetch one from your workstation or directly from the VM metadata server if using an instance role:
+```bash
+# On a VM with service account attached:
+TOKEN=$(curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
+```
+
+### Step 4: Create the External Catalog in StarRocks
+Connect to StarRocks using a MySQL client and run the following DDL. Note that we pass the OAuth2 token using `header.Authorization` to avoid Base64 parser errors with opaque tokens:
+
+```sql
+CREATE EXTERNAL CATALOG biglake_iceberg
+PROPERTIES (
+    "type" = "iceberg",
+    "iceberg.catalog.type" = "rest",
+    "uri" = "https://biglake.googleapis.com/iceberg/v1/restcatalog",
+    "warehouse" = "gs://<your-gcs-bucket-name>",
+    "gcp.gcs.use_instance_role" = "true",
+    "header.Authorization" = "Bearer <GCP_ACCESS_TOKEN>"
+);
+```
+Replace:
+*   `<your-gcs-bucket-name>`: The GCS bucket containing your Iceberg tables.
+*   `<GCP_ACCESS_TOKEN>`: The token obtained in Step 3.
+
+### Step 5: Verify Connectivity
+Run basic queries to verify:
+```sql
+SHOW DATABASES FROM biglake_iceberg;
+USE biglake_iceberg.<your-database-name>;
+SHOW TABLES;
+SELECT * FROM <your-table-name> LIMIT 10;
+```
+
+### Step 6: Handling Token Expiry (Workaround)
+The GCP access token expires after 1 hour. When it expires, StarRocks will return `Unknown table` or `Failed to load catalog` errors. You can refresh the token by altering the catalog properties:
+
+```sql
+ALTER CATALOG biglake_iceberg SET PROPERTIES (
+    "header.Authorization" = "Bearer <NEW_GCP_ACCESS_TOKEN>"
+);
+```
+
 ## Clean Up
 
 To delete the VM and clean up the Compute Engine resources:
