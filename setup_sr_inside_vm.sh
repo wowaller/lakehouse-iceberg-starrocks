@@ -49,6 +49,11 @@ fi
 
 cd "${SR_DIR}"
 
+# Download GCP Jars for Iceberg BigLake integration (for GoogleAuthManager)
+echo "Downloading Iceberg GCP jars..."
+wget -q -P fe/lib/ https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-gcp/1.10.0/iceberg-gcp-1.10.0.jar
+wget -q -P fe/lib/ https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-gcp-bundle/1.10.0/iceberg-gcp-bundle-1.10.0.jar
+
 # 5. Configure FE
 echo "Configuring FE..."
 FE_CONF="fe/conf/fe.conf"
