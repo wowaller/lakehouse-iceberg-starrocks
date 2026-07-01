@@ -31,7 +31,9 @@ PROPERTIES (
     \"uri\" = \"https://biglake.googleapis.com/iceberg/v1/restcatalog\",
     \"warehouse\" = \"gs://binggang-lab-lakehouse\",
     \"gcp.gcs.use_instance_role\" = \"true\",
-    \"header.Authorization\" = \"Bearer ${TOKEN}\"
+    \"io-impl\" = \"org.apache.iceberg.gcp.gcs.GCSFileIO\",
+    \"rest.auth.type\" = \"org.apache.iceberg.gcp.auth.GoogleAuthManager\",
+    \"header.x-goog-user-project\" = \"binggang-lab\"
 );
 "
 

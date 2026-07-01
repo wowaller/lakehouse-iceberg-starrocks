@@ -76,11 +76,33 @@ This script will:
     *   List the databases and tables in the catalog.
     *   Query the first 5 rows of `sentiment_analysis.sentiment_summary`.
 
-## Key Configuration Note: Opaque Token Authentication
+## Authentication Options
 
-Standard Iceberg REST Catalog clients expect the `token` property to contain a JWT (Base64-encoded JSON) and will fail with `IllegalArgumentException` when trying to parse opaque GCP access tokens (e.g. `ya29...`).
+To connect StarRocks to the BigLake REST Catalog, you have two options for authentication:
 
-To resolve this, our configuration bypasses the `token` property and sends the token directly as a custom HTTP header using `header.Authorization`:
+### Option 1: Automatic OAuth2 Auth via GoogleAuthManager (Recommended)
+This method uses the Google Cloud SDK's Application Default Credentials (ADC) to automatically fetch and rotate access tokens. It is the most robust option and prevents queries from failing due to token expiry.
+
+This requires copying `iceberg-gcp-1.10.0.jar` and `iceberg-gcp-bundle-1.10.0.jar` to StarRocks' `fe/lib/` directory.
+
+```sql
+CREATE EXTERNAL CATALOG bq_iceberg
+PROPERTIES (
+    "type" = "iceberg",
+    "iceberg.catalog.type" = "rest",
+    "uri" = "https://biglake.googleapis.com/iceberg/v1/restcatalog",
+    "warehouse" = "gs://binggang-lab-lakehouse",
+    "gcp.gcs.use_instance_role" = "true",
+    "io-impl" = "org.apache.iceberg.gcp.gcs.GCSFileIO",
+    "rest.auth.type" = "org.apache.iceberg.gcp.auth.GoogleAuthManager",
+    "header.x-goog-user-project" = "binggang-lab"
+);
+```
+
+### Option 2: Manual Token Auth (Alternative)
+If you cannot add the `iceberg-gcp` jars to the classpath, you can fetch an access token manually and pass it as a custom header. 
+
+*Note: Standard Iceberg REST clients expect the `token` property to contain a JWT and will fail to parse GCP's opaque tokens. We bypass this by passing the token via `header.Authorization` instead. This token expires after 1 hour.*
 
 ```sql
 CREATE EXTERNAL CATALOG bq_iceberg
@@ -93,6 +115,7 @@ PROPERTIES (
     "header.Authorization" = "Bearer <GCP_ACCESS_TOKEN>"
 );
 ```
+
 
 ## Configuring an Existing StarRocks Cluster
 
@@ -112,7 +135,21 @@ Iceberg integration requires the Java Native Interface (JNI) to load Iceberg Jav
     ./be/bin/start_be.sh --daemon
     ```
 
-### Step 2: Grant IAM Permissions to StarRocks BE Instances
+### Step 2: Install GCP Iceberg Jars (Recommended for Automatic Auth)
+If you want StarRocks to automatically manage token lifecycle using `GoogleAuthManager` (Option 1):
+1.  Download `iceberg-gcp` and `iceberg-gcp-bundle` jars (version `1.10.0` or later is required for `GoogleAuthManager`).
+    ```bash
+    wget https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-gcp/1.10.0/iceberg-gcp-1.10.0.jar
+    wget https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-gcp-bundle/1.10.0/iceberg-gcp-bundle-1.10.0.jar
+    ```
+2.  Copy both jars to the `fe/lib/` directory of all your StarRocks Frontend instances.
+3.  Restart all FE services:
+    ```bash
+    ./fe/bin/stop_fe.sh
+    ./fe/bin/start_fe.sh --daemon
+    ```
+
+### Step 3: Grant IAM Permissions to StarRocks BE Instances
 StarRocks BE nodes need permissions to read data files from GCS.
 *   **If using Instance Role (Recommended)**:
     1.  Identify the Service Account attached to your GCE VMs.
@@ -120,16 +157,31 @@ StarRocks BE nodes need permissions to read data files from GCS.
 *   **If using Service Account Key File**:
     *   Create a GCP service account, download its JSON key file, copy it to the StarRocks nodes, and refer to it in the catalog properties (using `gcp.gcs.credential.file.path` property).
 
-### Step 3: Obtain GCP OAuth2 Access Token
-The BigLake REST Catalog API requires an OAuth2 access token for authentication. You can fetch one from your workstation or directly from the VM metadata server if using an instance role:
+### Step 4: Obtain GCP OAuth2 Access Token (Only for Option 2)
+If you choose Option 2 (Manual Token Auth), you must fetch an access token. You can fetch one from your workstation or directly from the VM metadata server:
 ```bash
-# On a VM with service account attached:
 TOKEN=$(curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
 ```
 
-### Step 4: Create the External Catalog in StarRocks
-Connect to StarRocks using a MySQL client and run the following DDL. Note that we pass the OAuth2 token using `header.Authorization` to avoid Base64 parser errors with opaque tokens:
+### Step 5: Create the External Catalog in StarRocks
+Connect to StarRocks using a MySQL client and run the DDL corresponding to your chosen auth method:
 
+#### DDL for Option 1: Automatic Auth (Recommended)
+```sql
+CREATE EXTERNAL CATALOG biglake_iceberg
+PROPERTIES (
+    "type" = "iceberg",
+    "iceberg.catalog.type" = "rest",
+    "uri" = "https://biglake.googleapis.com/iceberg/v1/restcatalog",
+    "warehouse" = "gs://<your-gcs-bucket-name>",
+    "gcp.gcs.use_instance_role" = "true",
+    "io-impl" = "org.apache.iceberg.gcp.gcs.GCSFileIO",
+    "rest.auth.type" = "org.apache.iceberg.gcp.auth.GoogleAuthManager",
+    "header.x-goog-user-project" = "<your-gcp-project-id>"
+);
+```
+
+#### DDL for Option 2: Manual Token Auth (Fallback)
 ```sql
 CREATE EXTERNAL CATALOG biglake_iceberg
 PROPERTIES (
@@ -141,11 +193,8 @@ PROPERTIES (
     "header.Authorization" = "Bearer <GCP_ACCESS_TOKEN>"
 );
 ```
-Replace:
-*   `<your-gcs-bucket-name>`: The GCS bucket containing your Iceberg tables.
-*   `<GCP_ACCESS_TOKEN>`: The token obtained in Step 3.
 
-### Step 5: Verify Connectivity
+### Step 6: Verify Connectivity
 Run basic queries to verify:
 ```sql
 SHOW DATABASES FROM biglake_iceberg;
@@ -154,9 +203,8 @@ SHOW TABLES;
 SELECT * FROM <your-table-name> LIMIT 10;
 ```
 
-### Step 6: Handling Token Expiry (Workaround)
-The GCP access token expires after 1 hour. When it expires, StarRocks will return `Unknown table` or `Failed to load catalog` errors. You can refresh the token by altering the catalog properties:
-
+### Step 7: Handling Token Expiry (Only for Option 2)
+If you used Option 2, the token will expire after 1 hour, and queries will fail. You must alter the catalog to refresh the token:
 ```sql
 ALTER CATALOG biglake_iceberg SET PROPERTIES (
     "header.Authorization" = "Bearer <NEW_GCP_ACCESS_TOKEN>"
