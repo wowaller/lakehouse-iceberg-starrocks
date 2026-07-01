@@ -76,6 +76,41 @@ This script will:
     *   List the databases and tables in the catalog.
     *   Query the first 5 rows of `sentiment_analysis.sentiment_summary`.
 
+## Connecting to StarRocks
+
+Since the VM is deployed in a private subnet, you can connect to the StarRocks Frontend (query port `9030`) using one of the following methods:
+
+### Method 1: SSH Port Forwarding (Recommended for Workstation)
+Forward port `9030` from the VM to your local workstation:
+```bash
+gcloud compute ssh starrocks-test-vm \
+  --zone=us-central1-b \
+  --project=binggang-lab \
+  --tunnel-through-iap \
+  -- -L 9030:127.0.0.1:9030 -N
+```
+Then connect locally using any MySQL-compatible client:
+```bash
+mysql -h 127.0.0.1 -P 9030 -uroot
+```
+
+### Method 2: SSH and Run Locally on VM
+SSH into the VM:
+```bash
+gcloud compute ssh starrocks-test-vm --zone=us-central1-b --project=binggang-lab --tunnel-through-iap
+```
+Then run the pre-installed MySQL client inside the VM:
+```bash
+mysql -h 127.0.0.1 -P 9030 -uroot
+```
+
+### Method 3: Internal VPC Connection
+If connecting from another VM (e.g., Spark cluster) in the same VPC network (`local-lab`), connect directly to the internal IP of the FE node:
+```bash
+mysql -h <starrocks-fe-internal-ip> -P 9030 -uroot
+```
+*(The default internal IP for the test VM is `10.0.0.27`).*
+
 ## Authentication Options
 
 To connect StarRocks to the BigLake REST Catalog, you have two options for authentication:
